@@ -148,7 +148,7 @@ export const DEFAULT_WORKFLOW_SCHEMA_TEMPLATE: ForticsWorkflow = {
       verify_ssl: false,
       body_format: "json",
       headers: [{ key: "Content-Type", value: "application/json" }],
-      body: '{\n  "tokenOrganizacao": "2f8a1cef-bc28-4fc8-905a-aacba27e8c0c"\n}'
+      body: '{\n  "tokenOrganizacao": "SEU_TOKEN_ORGANIZACAO_AQUI"\n}'
     },
     {
       id: "b404b372-e1b3-4cec-bbb9-6b9da8455a9c",
@@ -421,7 +421,7 @@ export const REAL_NORMAL_WORKFLOWS: Array<{
           headers: [
             {
               key: "Authorization",
-              value: "Basic YkxJdnJCcXkzYjM0dGVvOFdXN3pKMDNlU0ZwR1ZQaU06"
+              value: "Basic SEU_TOKEN_BASIC_AUTH_SGG_AQUI"
             }
           ]
         },
@@ -448,7 +448,7 @@ export const REAL_NORMAL_WORKFLOWS: Array<{
           headers: [
             {
               key: "Authorization",
-              value: "Basic YkxJdnJCcXkzYjM0dGVvOFdXN3pKMDNlU0ZwR1ZQaU06"
+              value: "Basic SEU_TOKEN_BASIC_AUTH_SGG_AQUI"
             }
           ],
           query_params: [
@@ -478,7 +478,7 @@ export const REAL_NORMAL_WORKFLOWS: Array<{
           body_format: "json",
           body: "{\r\n  \"id_empresa\": \"{{dados_tratados.empresa.id_empresa}}\",\r\n  \"id_funcionario\": \"{{dados_funcionario.id_funcionario}}\",\r\n  \"data_demissao\": \"{{request.dataDemissão}}\"\r\n}",
           headers: [
-            { key: "Authorization", value: "Basic YkxJdnJCcXkzYjM0dGVvOFdXN3pKMDNlU0ZwR1ZQaU06" },
+            { key: "Authorization", value: "Basic SEU_TOKEN_BASIC_AUTH_SGG_AQUI" },
             { key: "Accept", value: "*/*" },
             { key: "Content-Type", value: "application/json" }
           ]
@@ -570,7 +570,7 @@ export const REAL_NORMAL_WORKFLOWS: Array<{
           body_format: "json",
           body: "{\n\"key\": \"value\"\n}",
           headers: [
-            { key: "Authorization", value: "Basic aS1sZWdhY3ktY2xpbmltYXJjLWZvcnRpY3NAY2xpbmljLmluZi5icjpCalJpNjRyYVcxelZSM1lYRW9oajlkV1RaTUhVOGs=" },
+            { key: "Authorization", value: "Basic SEU_TOKEN_BASIC_AUTH_CLINIC_AQUI" },
             { key: "Accept-Encoding", value: "gzip, deflate" }
           ]
         },
@@ -753,7 +753,7 @@ export const REAL_NORMAL_WORKFLOWS: Array<{
           uri: "https://erp.starconect.com.br:45700/connect/token",
           verify_ssl: true,
           body_format: "file",
-          body: "{\"grant_type\":\"client_credentials\",\"scope\":\"syngw\",\"client_id\":\"2330f8f1-f483-45fb-9f1d-bc5fdc048910\",\"client_secret\":\"1624cb7a-9c27-4905-9314-675b2a188425\",\"syndata\":\"TWpNMU9EYzVaakk1T0dSaU1USmxaalprWldFd00ySTFZV1JsTTJRMFptUT06WlhsS1ZHVlhOVWxpTTA0d1NXcHZhVTFVWXpOTWFrVjNUbmswTlU1cE5IbE5lbU5wVEVOS1ZHVlhOVVZaYVVrMlNXMVNhVnBYTVhkTlJFRXhUV3BGYVV4RFNrVlpiRkkxWTBkVmFVOXBTbmRpTTA0d1dqTktiR041U2prPTpaVGhrTWpNMVlqazBZemxpTkRObVpEZzNNRGxrTWpZMll6QXhNR00zTUdVPQ==\"}",
+          body: "{\"grant_type\":\"client_credentials\",\"scope\":\"syngw\",\"client_id\":\"SEU_CLIENT_ID_AQUI\",\"client_secret\":\"SUA_CLIENT_SECRET_AQUI\",\"syndata\":\"SEU_SYNDATA_DE_AUTENTICACAO_AQUI\"}",
           headers: [{ key: "Content-Type", value: "application/x-www-form-urlencoded" }]
         },
         {
@@ -775,7 +775,7 @@ export const REAL_NORMAL_WORKFLOWS: Array<{
           uri: "https://erp.starconect.com.br/pbx/pbx/events/new/CLIENT_VALIDATE",
           verify_ssl: false,
           body_format: "json",
-          body: "{\n    \"callerid\": \"{{request}}\",\n    \"token\": \"488aec95-0bd0-11ea-956c-5e2f033a4602\"\n}",
+          body: "{\n    \"callerid\": \"{{request}}\",\n    \"token\": \"SUA_CHAVE_DE_AUTENTICACAO_PBX_AQUI\"\n}",
           headers: [{ key: "Content-Type", value: "application/json" }]
         },
         {
@@ -853,7 +853,7 @@ export const REAL_NORMAL_WORKFLOWS: Array<{
           uri: "https://www.centralbutanonet.com.br/api/central/chamado/",
           verify_ssl: true,
           body_format: "json",
-          body: "{\n  \"app\": \"SZ.CHAT\",\n  \"token\": \"61273fe0-88be-488f-b9d6-4731771316f9\",\n  \"cpfcnpj\":\"{{request.documento}}\",\n  \"contrato\": \"{{request.contrato}}\",\n  \"conteudo\":\"{{request.descricao}}\",\n  \"motivoos\": \"{{request.codigo}}\",\n  \"os_tecnico_responsavel\": \"{{request.idTecnico}}\",\n  \"data_hora_agendamento\":\"{{request.dataAgendada}}\",\n  \"contato\": \"{{request.nomeContato}}\",\n  \"motivoos\": \"{{request.motivoOs}}\"\n}",
+          body: "{\n  \"app\": \"SZ.CHAT\",\n  \"token\": \"SEU_TOKEN_SZCHAT_AQUI\",\n  \"cpfcnpj\":\"{{request.documento}}\",\n  \"contrato\": \"{{request.contrato}}\",\n  \"conteudo\":\"{{request.descricao}}\",\n  \"motivoos\": \"{{request.codigo}}\",\n  \"os_tecnico_responsavel\": \"{{request.idTecnico}}\",\n  \"data_hora_agendamento\":\"{{request.dataAgendada}}\",\n  \"contato\": \"{{request.nomeContato}}\",\n  \"motivoos\": \"{{request.motivoOs}}\"\n}",
           headers: [{ key: "Content-Type", value: "application/json" }]
         },
         {
@@ -924,7 +924,7 @@ export const REAL_NORMAL_WORKFLOWS: Array<{
           uri: "https://siga-hml.governancabrasil.com.br/ws/statelessws.php",
           verify_ssl: true,
           body_format: "raw",
-          body: "user=integrador.ia&password=o3hN?sO!1P1Q8&company=2&wsdl_file=WSGeneral&operation=getSQLQueryResult&input_xml=%3C%3Fxml%20version%3D%221.0%22%20encoding%3D%22ISO-8859-1%22%3F%3E%3Cwsqualitor%3E%3Ccontents%3E%3Cdata%3E%3Cdsquery%3ESELECT%20TOP%203%20c.cdchamado%20AS%20Numero%2C%20c.dtchamado%20AS%20Abertura%20FROM%20hd_chamado%20c%20WHERE%20CONVERT(VARCHAR(30)%2C%20ac.nrcpfcnpj)%20%3D%20'{{request.cpfCliente}}'%3C%2Fdsquery%3E%3C%2Fdata%3E%3C%2Fcontents%3E%3C%2Fwsqualitor%3E",
+          body: "user=integrador.ia&password=SUA_SENHA_DE_AUTENTICACAO_AQUI&company=2&wsdl_file=WSGeneral&operation=getSQLQueryResult&input_xml=%3C%3Fxml%20version%3D%221.0%22%20encoding%3D%22ISO-8859-1%22%3F%3E%3Cwsqualitor%3E%3Ccontents%3E%3Cdata%3E%3Cdsquery%3ESELECT%20TOP%203%20c.cdchamado%20AS%20Numero%2C%20c.dtchamado%20AS%20Abertura%20FROM%20hd_chamado%20c%20WHERE%20CONVERT(VARCHAR(30)%2C%20ac.nrcpfcnpj)%20%3D%20'{{request.cpfCliente}}'%3C%2Fdsquery%3E%3C%2Fdata%3E%3C%2Fcontents%3E%3C%2Fwsqualitor%3E",
           headers: [
             { key: "Content-Type", value: "application/x-www-form-urlencoded" },
             { key: "Accept-Encoding", value: "gzip, deflate" }
@@ -1029,7 +1029,7 @@ export const REAL_LOOPING_WORKFLOWS: Array<{
           uri: "https://erp.starconect.com.br:45700/connect/token",
           verify_ssl: true,
           body_format: "file",
-          body: "{\"grant_type\":\"client_credentials\",\"scope\":\"syngw\",\"client_id\":\"2330f8f1-f483-45fb-9f1d-bc5fdc048910\"}",
+          body: "{\"grant_type\":\"client_credentials\",\"scope\":\"syngw\",\"client_id\":\"SEU_CLIENT_ID_AQUI\"}",
           headers: [{ key: "Content-Type", value: "application/x-www-form-urlencoded" }]
         },
         {
@@ -1261,7 +1261,7 @@ export const REAL_LOOPING_WORKFLOWS: Array<{
           uri: "https://naja-auth.naja.app/Login/AutenticarOrganizacao",
           verify_ssl: false,
           body_format: "json",
-          body: "{\n  \"tokenOrganizacao\": \"2f8a1cef-bc28-4fc8-905a-aacba27e8c0c\"\n}",
+          body: "{\n  \"tokenOrganizacao\": \"SEU_TOKEN_ORGANIZACAO_AQUI\"\n}",
           headers: [{ key: "Content-Type", value: "application/json" }]
         },
         {
