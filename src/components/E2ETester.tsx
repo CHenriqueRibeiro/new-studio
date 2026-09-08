@@ -231,7 +231,7 @@ const CURL_TEMPLATES = [
     id: 'triagem_provedor_agent',
     title: '🤖 Agente de Triagem Provedor (History + Query)',
     desc: 'Padrão nativo do endpoint /api/agent/{id} com fluxo de triagem, identificação e transferência.',
-    curl: `curl https://app.genier.ai/starconect/api/agent/agent_triagem_provedor \\
+    curl: `curl https://app.genier.ai/empresa_exemplo/api/agent/agent_triagem_provedor \\
   --request POST \\
   --header 'Authorization: Bearer SEU_TOKEN_AQUI' \\
   --header 'Content-Type: application/json' \\
@@ -282,7 +282,7 @@ export const E2ETester: React.FC<E2ETesterProps> = ({
     headers: Record<string, string>;
     body: string;
   }>({
-    url: 'https://app.genier.ai/starconect/api/agent/agent_triagem_provedor',
+    url: 'https://app.genier.ai/empresa_exemplo/api/agent/agent_triagem_provedor',
     method: 'POST',
     headers: {
       Authorization: 'Bearer SEU_TOKEN_AQUI',
@@ -308,7 +308,7 @@ export const E2ETester: React.FC<E2ETesterProps> = ({
         mode: 'curl',
         rawCurl: CURL_TEMPLATES[0].curl,
         parsedCurl: {
-          url: 'https://app.genier.ai/starconect/api/agent/agent_triagem_provedor',
+          url: 'https://app.genier.ai/empresa_exemplo/api/agent/agent_triagem_provedor',
           method: 'POST',
           headers: {
             Authorization: 'Bearer SEU_TOKEN_AQUI',

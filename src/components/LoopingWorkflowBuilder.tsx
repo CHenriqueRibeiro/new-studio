@@ -166,7 +166,7 @@ export const LoopingWorkflowBuilder: React.FC<LoopingWorkflowBuilderProps> = ({
   const [hasDatabaseStep, setHasDatabaseStep] = useState<boolean>(false);
   const [dbNodeName, setDbNodeName] = useState<string>('gravar_historico_db');
   const [dbNodeMethod, setDbNodeMethod] = useState<'POST' | 'PUT' | 'PATCH'>('POST');
-  const [dbNodeUri, setDbNodeUri] = useState<string>('https://app.genier.ai/omnimagem/godb/api/collections/Historico/records');
+  const [dbNodeUri, setDbNodeUri] = useState<string>('https://app.genier.ai/empresa_exemplo/godb/api/collections/Historico/records');
   const [dbNodeAuthHeader, setDbNodeAuthHeader] = useState<string>('Bearer {{_credential.token}}');
   const [dbNodeBody, setDbNodeBody] = useState<string>(`{
   "registro_id": "{{item.id}}",

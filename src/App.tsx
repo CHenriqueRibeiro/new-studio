@@ -51,67 +51,81 @@ export default function App() {
     }
   }, [theme]);
 
+  // Limpeza automática de caches de sessões legadas com dados não sanitizados
+  const cleanStorage = () => {
+    try {
+      const legacyKeys = ['fortics_current_agent', 'fortics_current_workflow', 'fortics_current_workflows'];
+      legacyKeys.forEach(k => {
+        const val = sessionStorage.getItem(k);
+        if (val && (val.includes('204.199') || val.includes('2f8a1cef') || val.includes('tokenOrganizacao'))) {
+          sessionStorage.removeItem(k);
+        }
+      });
+    } catch (_) {}
+  };
+  cleanStorage();
+
   const [agent, setAgent] = useState<ForticsAgent>(() => {
     try {
-      const saved = sessionStorage.getItem('fortics_current_agent');
-      if (saved) return JSON.parse(saved);
+      const saved = sessionStorage.getItem('fortics_v3_current_agent');
+      if (saved && !saved.includes('204.199') && !saved.includes('2f8a1cef')) return JSON.parse(saved);
     } catch (_) {}
     return DEFAULT_AGENT_SCHEMA_TEMPLATE;
   });
 
   const [agents, setAgents] = useState<ForticsAgent[]>(() => {
     try {
-      const saved = sessionStorage.getItem('fortics_current_agents');
-      if (saved) return JSON.parse(saved);
+      const saved = sessionStorage.getItem('fortics_v3_current_agents');
+      if (saved && !saved.includes('204.199') && !saved.includes('2f8a1cef')) return JSON.parse(saved);
     } catch (_) {}
     return [];
   });
 
   const [workflow, setWorkflow] = useState<ForticsWorkflow>(() => {
     try {
-      const saved = sessionStorage.getItem('fortics_current_workflow');
-      if (saved) return JSON.parse(saved);
+      const saved = sessionStorage.getItem('fortics_v3_current_workflow');
+      if (saved && !saved.includes('204.199') && !saved.includes('2f8a1cef')) return JSON.parse(saved);
     } catch (_) {}
     return DEFAULT_WORKFLOW_SCHEMA_TEMPLATE;
   });
 
   const [workflows, setWorkflows] = useState<ForticsWorkflow[]>(() => {
     try {
-      const saved = sessionStorage.getItem('fortics_current_workflows');
-      if (saved) return JSON.parse(saved);
+      const saved = sessionStorage.getItem('fortics_v3_current_workflows');
+      if (saved && !saved.includes('204.199') && !saved.includes('2f8a1cef')) return JSON.parse(saved);
     } catch (_) {}
     return [DEFAULT_WORKFLOW_SCHEMA_TEMPLATE];
   });
 
   const [hasGenerated, setHasGenerated] = useState<boolean>(() => {
-    return sessionStorage.getItem('fortics_has_generated') === 'true';
+    return sessionStorage.getItem('fortics_v3_has_generated') === 'true';
   });
 
   const [showJsonSection, setShowJsonSection] = useState<boolean>(() => {
-    return sessionStorage.getItem('fortics_show_json') === 'true';
+    return sessionStorage.getItem('fortics_v3_show_json') === 'true';
   });
 
   useEffect(() => {
     try {
-      sessionStorage.setItem('fortics_current_agent', JSON.stringify(agent));
+      sessionStorage.setItem('fortics_v3_current_agent', JSON.stringify(agent));
     } catch (_) {}
   }, [agent]);
 
   useEffect(() => {
     try {
-      sessionStorage.setItem('fortics_current_workflow', JSON.stringify(workflow));
+      sessionStorage.setItem('fortics_v3_current_workflow', JSON.stringify(workflow));
     } catch (_) {}
   }, [workflow]);
 
   useEffect(() => {
     try {
-      sessionStorage.setItem('fortics_current_workflows', JSON.stringify(workflows));
+      sessionStorage.setItem('fortics_v3_current_workflows', JSON.stringify(workflows));
     } catch (_) {}
   }, [workflows]);
 
   useEffect(() => {
-    sessionStorage.setItem('fortics_has_generated', String(hasGenerated));
-    sessionStorage.setItem('fortics_show_json', String(showJsonSection));
+    sessionStorage.setItem('fortics_v3_has_generated', String(hasGenerated));
+    sessionStorage.setItem('fortics_v3_show_json', String(showJsonSection));
   }, [hasGenerated, showJsonSection]);
 
   const resultsRef = useRef<HTMLDivElement>(null);
