@@ -940,6 +940,7 @@ Gere o JSON consolidado estritamente com as chaves:
 `;
 
     let rawOutput = '';
+    let generatedWorkflowsList: any[] = [];
 
     try {
       if (provider === 'openai') {
@@ -1009,7 +1010,7 @@ Gere o JSON consolidado estritamente com as chaves:
           .filter(Boolean);
       }
 
-      let generatedWorkflowsList: any[] = [];
+      generatedWorkflowsList = [];
 
       const validConfiguredWorkflows = (configuredWorkflows && Array.isArray(configuredWorkflows))
         ? configuredWorkflows.filter((cw: any) => cw.curlItems && Array.isArray(cw.curlItems) && cw.curlItems.length > 0)
@@ -1847,6 +1848,69 @@ Gere o JSON consolidado estritamente com as chaves:
       }).filter(Boolean);
     } else if (parsed.workflow) {
       sanitizedWorkflows = [parsed.workflow];
+    }
+
+    if (sanitizedWorkflows.length === 0) {
+      if (generatedWorkflowsList && generatedWorkflowsList.length > 0) {
+        sanitizedWorkflows = generatedWorkflowsList.map((wf: any, idx: number) =>
+          sanitizeWorkflow(wf, `Workflow ${idx + 1} - ${wf.name || 'Integração'}`)
+        ).filter(Boolean);
+      } else {
+        const fallbackDefault = sanitizeWorkflow({
+          id: crypto.randomUUID(),
+          name: 'WF - Integração Principal',
+          enabled: true,
+          flow: [
+            {
+              id: crypto.randomUUID(),
+              type: 'instructions',
+              __spec: true,
+              __spec_version: '1.0.0',
+              content: 'Executa a integração com o sistema externo e retorna dados estruturados.\n\nArgs:\n  documento (str): CPF ou identificador do cliente.\n\nReturns:\n  dict: Dados cadastrais e status retornado pela API.'
+            },
+            {
+              id: crypto.randomUUID(),
+              name: 'request',
+              type: 'code',
+              __spec: true,
+              __spec_version: '1.0.0',
+              error_message: 'Desculpe estou com dificuldades para processar sua solicitação',
+              value: STANDARD_REQUEST_CODE
+            },
+            {
+              id: crypto.randomUUID(),
+              name: 'response',
+              type: 'rest',
+              __spec: true,
+              __spec_version: '1.0.0',
+              method: 'GET',
+              uri: 'https://api.exemplo.com/v1/consulta?documento={{request.documento}}',
+              verify_ssl: true,
+              headers: [{ key: 'Content-Type', value: 'application/json' }],
+              query_params: []
+            },
+            {
+              id: crypto.randomUUID(),
+              name: 'tratar_dados',
+              type: 'code',
+              __spec: true,
+              __spec_version: '1.0.0',
+              error_message: 'Erro ao processar dados da API',
+              value: 'try {\n    let dados = _vars.response;\n    if (typeof dados === "string") dados = JSON.parse(dados);\n    return dados || { status: "sucesso" };\n} catch(e) {\n    return { status: "erro", message: e.message };\n}'
+            },
+            {
+              id: crypto.randomUUID(),
+              type: 'route_return',
+              __spec: true,
+              __spec_version: '1.0.0',
+              content_type: 'application/json',
+              status_code: '200',
+              value: '{{#tojson}}\n{{tratar_dados}}\n{{/tojson}}'
+            }
+          ]
+        }, 'WF - Integração Principal');
+        sanitizedWorkflows = [fallbackDefault];
+      }
     }
 
     if (workflowArchitectureMode === 'single_consolidated' && sanitizedWorkflows.length > 1) {
