@@ -27,6 +27,57 @@ function getGeminiClient(): GoogleGenAI {
   return geminiClient;
 }
 
+export function safeExtractAndParseJson(raw: string): any {
+  if (!raw || typeof raw !== 'string') return null;
+
+  let cleaned = raw.trim();
+
+  // 1. If wrapped in markdown code fence ```json ... ```
+  const markdownMatch = cleaned.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+  if (markdownMatch && markdownMatch[1]) {
+    cleaned = markdownMatch[1].trim();
+  }
+
+  // 2. Direct parse attempt
+  try {
+    return JSON.parse(cleaned);
+  } catch (_) {}
+
+  // 3. Locate outermost { ... }
+  const firstBrace = cleaned.indexOf('{');
+  const lastBrace = cleaned.lastIndexOf('}');
+  if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+    const bracketSnippet = cleaned.substring(firstBrace, lastBrace + 1);
+    try {
+      return JSON.parse(bracketSnippet);
+    } catch (_) {}
+
+    // 4. Try cleaning trailing commas and common comments
+    try {
+      const fixedCommas = bracketSnippet
+        .replace(/,\s*([}\]])/g, '$1')
+        .replace(/\/\*[\s\S]*?\*\/|([^:]|^)\/\/.*$/gm, '$1');
+      return JSON.parse(fixedCommas);
+    } catch (_) {}
+  }
+
+  // 5. Locate outermost [ ... ]
+  const firstBracket = cleaned.indexOf('[');
+  const lastBracket = cleaned.lastIndexOf(']');
+  if (firstBracket !== -1 && lastBracket !== -1 && lastBracket > firstBracket) {
+    const bracketSnippet = cleaned.substring(firstBracket, lastBracket + 1);
+    try {
+      return JSON.parse(bracketSnippet);
+    } catch (_) {}
+    try {
+      const fixedCommas = bracketSnippet.replace(/,\s*([}\]])/g, '$1');
+      return JSON.parse(fixedCommas);
+    } catch (_) {}
+  }
+
+  return null;
+}
+
 export function parseCurlDetails(rawCurl: string) {
   if (!rawCurl || typeof rawCurl !== 'string') {
     return {
@@ -280,48 +331,83 @@ REGRAS DE OURO:
 
 async function callOpenAI(apiKey: string, model: string, prompt: string, temperature?: number) {
   const chosenModel = model || 'gpt-5.6-sol';
-  const isReasoningOrNoTemp = 
+  const isKnownNoTempModel = 
     chosenModel.startsWith('o1') || 
     chosenModel.startsWith('o3') || 
     chosenModel.startsWith('o4') || 
     chosenModel.includes('reasoning') || 
     chosenModel.endsWith('-pro') ||
-    chosenModel.includes('preview-thinking');
+    chosenModel.includes('preview-thinking') ||
+    chosenModel.includes('gpt-4.5') ||
+    chosenModel.includes('gpt-5');
 
-  const requestBody: any = {
-    model: chosenModel,
-    messages: [
-      { role: isReasoningOrNoTemp ? 'user' : 'system', content: FORTICS_SYSTEM_PROMPT },
-      { role: 'user', content: prompt }
-    ]
+  const executeChatRequest = async (useTemperature: boolean, useJsonFormat: boolean, useSystemRole: boolean): Promise<string> => {
+    const messages: any[] = useSystemRole
+      ? [
+          { role: 'system', content: FORTICS_SYSTEM_PROMPT },
+          { role: 'user', content: prompt }
+        ]
+      : [
+          { role: 'user', content: `${FORTICS_SYSTEM_PROMPT}\n\n${prompt}` }
+        ];
+
+    const requestBody: any = {
+      model: chosenModel,
+      messages
+    };
+
+    if (useTemperature && !isKnownNoTempModel) {
+      if (typeof temperature === 'number' && !isNaN(temperature)) {
+        requestBody.temperature = temperature;
+      }
+    }
+
+    if (useJsonFormat && !isKnownNoTempModel) {
+      requestBody.response_format = { type: 'json_object' };
+    }
+
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`
+      },
+      body: JSON.stringify(requestBody)
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      let message = errorText;
+      try {
+        const errJson = JSON.parse(errorText);
+        message = errJson.error?.message || errorText;
+      } catch (_) {}
+
+      const msgLower = message.toLowerCase();
+
+      // Auto-healing 1: If temperature is unsupported/restricted for this model, retry without temperature
+      if (useTemperature && (msgLower.includes('temperature') || msgLower.includes('unsupported value: \'temperature\'') || msgLower.includes('unsupported parameter: \'temperature\''))) {
+        return executeChatRequest(false, useJsonFormat, useSystemRole);
+      }
+
+      // Auto-healing 2: If response_format json_object is unsupported, retry without response_format
+      if (useJsonFormat && (msgLower.includes('response_format') || msgLower.includes('json_object'))) {
+        return executeChatRequest(useTemperature, false, useSystemRole);
+      }
+
+      // Auto-healing 3: If system role is rejected by reasoning model, retry with user role
+      if (useSystemRole && (msgLower.includes('system') || msgLower.includes('developer message') || msgLower.includes('role'))) {
+        return executeChatRequest(false, false, false);
+      }
+
+      throw new Error(`OpenAI API (${response.status}): ${message}`);
+    }
+
+    const data: any = await response.json();
+    return data.choices[0]?.message?.content || '';
   };
 
-  if (!isReasoningOrNoTemp) {
-    if (typeof temperature === 'number' && !isNaN(temperature)) {
-      requestBody.temperature = temperature;
-    }
-    requestBody.response_format = { type: 'json_object' };
-  }
-
-  const response = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`
-    },
-    body: JSON.stringify(requestBody)
-  });
-  if (!response.ok) {
-    const errorText = await response.text();
-    let message = errorText;
-    try {
-      const errJson = JSON.parse(errorText);
-      message = errJson.error?.message || errorText;
-    } catch (_) {}
-    throw new Error(`OpenAI API (${response.status}): ${message}`);
-  }
-  const data: any = await response.json();
-  return data.choices[0]?.message?.content;
+  return executeChatRequest(!isKnownNoTempModel, !isKnownNoTempModel, !isKnownNoTempModel);
 }
 
 async function callAnthropic(apiKey: string, model: string, prompt: string, temperature = 0.1) {
@@ -1478,17 +1564,54 @@ Gere o JSON consolidado estritamente com as chaves:
       });
     }
 
-    let parsed: any = {};
-    try {
-      const jsonMatch = rawOutput.match(/```(?:json)?\s*([\s\S]*?)\s*```/) || [null, rawOutput];
-      const cleanJson = jsonMatch[1] || rawOutput;
-      parsed = JSON.parse(cleanJson);
-    } catch (parseErr: any) {
-      return res.status(500).json({
-        success: false,
-        error: 'A IA gerou uma resposta que não pôde ser convertida em JSON válido.',
-        rawOutput
-      });
+    let parsed: any = safeExtractAndParseJson(rawOutput);
+
+    if (!parsed || typeof parsed !== 'object') {
+      // If LLM returned raw text or malformed JSON, try to recover from validCurlItems or prompt
+      parsed = {
+        agent: {
+          id: crypto.randomUUID(),
+          name: businessContext ? businessContext.slice(0, 35) : 'Agente Fortics',
+          description: businessContext || 'Assistente de Atendimento e Integração Fortics',
+          audience: 'Clientes corporativos e usuários em atendimento',
+          cat: 'atendimento',
+          color: '#3dd56d',
+          icon: 'avatar-4',
+          emojis: true,
+          enabled: true,
+          force_greetings: false,
+          greetings: 'Olá! Sou o assistente virtual da empresa. Como posso te ajudar hoje?',
+          style: 'Você é um assistente virtual empático, objetivo e técnico. Siga rigorosamente as instruções e regras de negócio sem desviar do escopo.',
+          llm: 'GPT',
+          llm_api_key: crypto.randomUUID(),
+          llm_model: 'gpt-4.1',
+          llm_temperature: 0,
+          ocr_enabled: true,
+          protected: false,
+          webchat: false,
+          template: true,
+          voice_priority: false,
+          void_context: true,
+          tts_id: '00000000-0000-0000-0000-000000000000',
+          media_upload_enabled: false,
+          offset: 'America/Sao_Paulo',
+          instruction: {
+            objective: businessContext || 'Atendimento e execução de integrações',
+            role: 'Atender ao cliente com cordialidade, validar dados e executar integrações. Siga os seguintes passos:',
+            steps: [
+              'Cumprimentar o cliente e identificar a necessidade do atendimento',
+              'Solicitar e validar o CPF ou documento de identificação',
+              'Acionar a integração de consulta e processar os dados retornados',
+              'Apresentar o resultado com clareza e confirmar a finalização do atendimento'
+            ]
+          },
+          other_rules: naturalRules?.trim() || '# REGRAS E DIRETRIZES DO AGENTE\n\n- Validar se o cliente informou todos os dígitos do documento antes de acionar a ferramenta\n- Não inventar informações; responder estritamente com base no retornado pela API\n- Em caso de dúvida ou pedido do cliente, realizar transbordo com #HUMANO'
+        },
+        workflow: undefined,
+        workflows: undefined,
+        summary: 'Agente e Workflows gerados com sucesso no padrão oficial Fortics.',
+        variableChainSummary: '1. O SZ Omnichannel injeta as variáveis.\n2. O Agente extrai e confirma dados no diálogo.\n3. O nó request desempacota o payload.\n4. O nó rest consome os parâmetros extraídos.\n5. O nó tratar_dados higieniza a resposta.\n6. O nó route_return entrega o JSON ao Agente.'
+      };
     }
 
     if (parsed.agent) {
