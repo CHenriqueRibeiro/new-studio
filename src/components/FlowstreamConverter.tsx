@@ -366,6 +366,59 @@ export const FlowstreamConverter: React.FC<FlowstreamConverterProps> = ({
 
     try {
       const parsed = JSON.parse(rawJson);
+
+      // 1. Direct Fortics Workflow format check
+      if (parsed && (parsed.flow || (Array.isArray(parsed) && parsed.length > 0 && parsed[0]?.flow))) {
+        const wfArray = Array.isArray(parsed) ? parsed : [parsed];
+        const extracted: ConfiguredWorkflow[] = wfArray.map((wf: any, idx: number) => {
+          const flow = Array.isArray(wf.flow) ? wf.flow : [];
+          const restNodes = flow.filter((n: any) => n.type === 'rest');
+          const instNode = flow.find((n: any) => n.type === 'instructions');
+          const codeNodes = flow.filter((n: any) => n.type === 'code' && n.name !== 'request');
+
+          const curlItems: CurlItem[] = restNodes.map((rn: any, rIdx: number) => {
+            const headersList: string[] = [];
+            if (Array.isArray(rn.headers)) {
+              rn.headers.forEach((h: any) => {
+                if (h?.key && h?.value) headersList.push(`-H "${h.key}: ${h.value}"`);
+              });
+            }
+            const curl = `curl -X ${rn.method || 'GET'} "${rn.uri || rn.url || 'https://api.empresa.com.br'}" ${headersList.length > 0 ? '\\\n  ' + headersList.join(' \\\n  ') : ''} ${rn.body ? `\\\n  -d '${typeof rn.body === 'string' ? rn.body.replace(/\n\s*/g, ' ') : JSON.stringify(rn.body)}'` : ''}`;
+            const matchingCode = codeNodes[rIdx] || codeNodes[codeNodes.length - 1];
+
+            return {
+              id: crypto.randomUUID(),
+              name: rn.name || `Etapa ${rIdx + 1}`,
+              nodeName: rn.name || `etapa_${rIdx + 1}`,
+              curl: curl.trim(),
+              responseSample: '{\n  "status": "sucesso"\n}',
+              filterRules: matchingCode?.value || 'Tratar dados para retorno.',
+              generatedJsCode: matchingCode?.value
+            };
+          });
+
+          return {
+            id: wf.id || crypto.randomUUID(),
+            name: wf.name || `Operação ${idx + 1}`,
+            description: instNode?.content?.split('\n')[0] || wf.name || `Operação ${idx + 1}`,
+            curlItems: curlItems.length > 0 ? curlItems : [{
+              id: crypto.randomUUID(),
+              name: 'Operação Principal',
+              curl: 'curl -X GET "https://api.empresa.com.br/v1/consulta"',
+              responseSample: '{\n  "status": "sucesso"\n}',
+              filterRules: 'Tratar dados para retorno.'
+            }]
+          };
+        });
+
+        setStreamName(parsed.name || `Workflows Fortics (${extracted.length})`);
+        setRoutesList(extracted);
+        setParseError(null);
+        showToast('success', `✨ ${extracted.length} Workflows Fortics reconhecidos com sucesso!`);
+        return;
+      }
+
+      // 2. Total.js Flowstream parsing
       const vars: Record<string, string> = parsed.variables || {};
       const design: Record<string, any> = parsed.design || {};
 
@@ -379,7 +432,16 @@ export const FlowstreamConverter: React.FC<FlowstreamConverterProps> = ({
       const entryNodeIds: string[] = [];
       Object.keys(design).forEach(key => {
         const node = design[key];
-        if (node.component === 'genieragent' || (node.config && node.config.url && node.connections?.output)) {
+        const comp = (node.component || '').toLowerCase();
+        const isTrigger = comp === 'genieragent' ||
+          comp === 'route' ||
+          comp === 'endpoint' ||
+          comp === 'webhook' ||
+          comp === 'trigger' ||
+          comp === 'input' ||
+          comp === 'api' ||
+          (node.config && (node.config.url || node.config.path) && (node.connections?.output || node.connections?.response || node.connections?.output1));
+        if (isTrigger) {
           entryNodeIds.push(key);
         }
       });
@@ -411,7 +473,7 @@ export const FlowstreamConverter: React.FC<FlowstreamConverterProps> = ({
 
       const extractedWorkflows: ConfiguredWorkflow[] = entryNodeIds.map((triggerId, routeIndex) => {
         const triggerNode = design[triggerId];
-        const rawPath = (triggerNode.config?.url || `/operacao_${routeIndex + 1}`).replace(/^\/+/, '');
+        const rawPath = (triggerNode.config?.url || triggerNode.config?.path || `/operacao_${routeIndex + 1}`).replace(/^\/+/, '');
         const cleanName = rawPath
           .replace(/_/g, ' ')
           .replace(/-/g, ' ')
@@ -448,8 +510,14 @@ export const FlowstreamConverter: React.FC<FlowstreamConverterProps> = ({
           }
         }
 
-        const requestNodesInBranch = orderedBranchNodes.filter(c => c.node.component === 'request');
-        const codeNodesInBranch = orderedBranchNodes.filter(c => c.node.component === 'code');
+        const requestNodesInBranch = orderedBranchNodes.filter(c => {
+          const comp = (c.node.component || '').toLowerCase();
+          return comp === 'request' || comp === 'rest' || comp === 'http' || comp === 'api' || comp === 'fetch' || (c.node.config && (c.node.config.url || c.node.config.uri));
+        });
+        const codeNodesInBranch = orderedBranchNodes.filter(c => {
+          const comp = (c.node.component || '').toLowerCase();
+          return comp === 'code' || comp === 'function' || comp === 'js';
+        });
 
         let detectedParam = 'documento';
         if (rawPath.includes('contrato') || rawPath.includes('desbloqueio')) {
@@ -505,25 +573,38 @@ export const FlowstreamConverter: React.FC<FlowstreamConverterProps> = ({
               stepResponse = '{\n  "status": "sucesso",\n  "cliente": {\n    "id": 5542,\n    "nome": "João da Silva",\n    "contratos": ["CTR-8812"]\n  }\n}';
             }
 
+            let codeVal = '';
+            if (codeNodesInBranch.length > 0) {
+              const matched = codeNodesInBranch[stepIdx] || codeNodesInBranch[codeNodesInBranch.length - 1];
+              codeVal = matched?.node?.config?.code || matched?.node?.config?.value || matched?.node?.value || '';
+            }
+
             return {
               id: crypto.randomUUID(),
               name: stepName,
               nodeName: stepIdx === 0 && (reqUrl.includes('auth') || reqUrl.includes('token')) ? 'token' : `etapa_${stepIdx + 1}`,
               curl: curlString,
               responseSample: stepResponse,
-              filterRules: 'Tratar dados para repasse à próxima etapa ou retorno.'
+              filterRules: codeVal ? 'Código JavaScript extraído do Total.js' : 'Tratar dados para repasse à próxima etapa ou retorno.',
+              generatedJsCode: codeVal
             };
           });
         } else {
           const finalUri = `${vars.host || 'https://api.empresa.com.br'}/${rawPath}`;
           const bodyPayload = JSON.stringify({ [detectedParam]: `{{request.${detectedParam}}}` }, null, 2);
+          let codeVal = '';
+          if (codeNodesInBranch.length > 0) {
+            const matched = codeNodesInBranch[0];
+            codeVal = matched?.node?.config?.code || matched?.node?.config?.value || matched?.node?.value || '';
+          }
           branchCurlItems = [{
             id: crypto.randomUUID(),
             name: wfName,
             nodeName: `etapa_1`,
             curl: `curl -X POST "${finalUri}" \\\n  -H "Content-Type: application/json" \\\n  -d '${bodyPayload.replace(/\n\s*/g, ' ')}'`,
             responseSample: '{\n  "status": "sucesso",\n  "resultado": "Operação processada"\n}',
-            filterRules: 'Tratar dados para retorno.'
+            filterRules: codeVal ? 'Código JavaScript extraído do Total.js' : 'Tratar dados para retorno.',
+            generatedJsCode: codeVal
           }];
         }
 
@@ -969,6 +1050,45 @@ ${mappingLines.join(',\n')}
       model,
       apiKey: activeKey,
       temperature: 0.1,
+      workflowArchitectureMode,
+      configuredWorkflows: routesList,
+      curlItems: allCurlItems
+    });
+  };
+
+  const handleInstantGenerate = async () => {
+    if (routesList.length === 0) {
+      showToast('error', 'Por favor, cole um JSON válido do FlowStream ou adicione ao menos 1 rota.');
+      return;
+    }
+
+    const cleanWfName = (raw: string) => (raw || 'Consulta de Informações').replace(/^[0-9.\-_ ]+/, '').trim().toLowerCase();
+    const effectiveSteps = [
+      'Cumprimentar o cliente e solicitar documento/parâmetro inicial',
+      ...routesList.map((r, idx) => {
+        const name = cleanWfName(r.name);
+        return idx === 0
+          ? `Executar a ${name} com o documento informado`
+          : `Com o identificador retornado na etapa anterior, executar a ${name}`;
+      }),
+      'Confirmar os dados e entregar o resultado estruturado ao cliente'
+    ].join('\n');
+
+    const allCurlItems = routesList.flatMap(r => r.curlItems);
+
+    await onGenerate({
+      mode: 'new',
+      studioMode,
+      inputMode: 'workflow_driven',
+      businessContext: streamName || 'Atendimento Inteligente integrado via Total.js FlowStream',
+      freeformPrompt: '',
+      agentTargets: studioMode === 'both' ? agentsList : undefined,
+      naturalSteps: effectiveSteps,
+      naturalRules: naturalRules.trim(),
+      provider: 'gemini',
+      model: 'gemini-3.7-flash',
+      apiKey: undefined,
+      temperature: 0,
       workflowArchitectureMode,
       configuredWorkflows: routesList,
       curlItems: allCurlItems
@@ -1974,25 +2094,36 @@ ${mappingLines.join(',\n')}
         </div>
       </div>
 
-      {}
-      <div className="sticky bottom-4 z-40 flex justify-center items-center pt-4">
+      {/* Action Buttons */}
+      <div className="sticky bottom-4 z-40 flex flex-wrap justify-center items-center gap-3 pt-4">
+        <button
+          type="button"
+          onClick={handleInstantGenerate}
+          disabled={isGenerating || routesList.length === 0}
+          className="px-6 py-3.5 bg-[#03152d] hover:bg-[#06244f] border border-cyan-400/40 text-cyan-200 hover:text-white rounded-full text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer shadow-lg shadow-cyan-900/30 transform hover:-translate-y-0.5"
+          title="Converte imediatamente todas as rotas do Total.js para Workflows Fortics válidos com os 5 nós oficiais sem depender de chave ou cotas de IA."
+        >
+          <Zap className="w-4 h-4 text-[#00D2FF]" />
+          <span>Converter Imediatamente ({routesList.length} Workflows Fortics)</span>
+        </button>
+
         <button
           type="submit"
           disabled={isGenerating || routesList.length === 0}
-          className="px-10 py-3.5 bg-linear-to-r from-[#0052FF] via-[#0066FF] to-[#00D2FF] hover:brightness-110 disabled:opacity-50 text-white rounded-full text-sm font-black transition-all flex items-center justify-center gap-3 cursor-pointer shadow-xl shadow-[#0066FF]/40 hover:shadow-[#00D2FF]/50 transform hover:-translate-y-0.5 border border-[#00D2FF]/40"
+          className="px-8 py-3.5 bg-linear-to-r from-[#0052FF] via-[#0066FF] to-[#00D2FF] hover:brightness-110 disabled:opacity-50 text-white rounded-full text-xs font-black transition-all flex items-center justify-center gap-2.5 cursor-pointer shadow-xl shadow-[#0066FF]/40 hover:shadow-[#00D2FF]/50 transform hover:-translate-y-0.5 border border-[#00D2FF]/40"
         >
           {isGenerating ? (
             <>
               <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-              <span>Gerando Estruturas Oficiais Fortics...</span>
+              <span>Gerando com IA...</span>
             </>
           ) : (
             <>
-              <Zap className="w-4 h-4 fill-current text-amber-300" />
+              <Sparkles className="w-4 h-4 fill-current text-amber-300" />
               <span>
                 {studioMode === 'both'
-                  ? `Gerar Agente e ${routesList.length} Workflows do Total.js (${totalCallsCount} APIs)`
-                  : `Gerar ${routesList.length} Workflows do Total.js (${totalCallsCount} APIs)`}
+                  ? `Gerar Agente e Workflows com IA (${routesList.length} Ops)`
+                  : `Gerar Workflows com IA (${routesList.length} Ops)`}
               </span>
             </>
           )}

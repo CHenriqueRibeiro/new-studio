@@ -27,6 +27,76 @@ function getGeminiClient(): GoogleGenAI {
   return geminiClient;
 }
 
+export function repairTruncatedJson(str: string): any {
+  if (!str || typeof str !== 'string') return null;
+  let cleaned = str.trim();
+  const mdMatch = cleaned.match(/```(?:json)?\s*([\s\S]*?)(?:```|$)/i);
+  if (mdMatch && mdMatch[1]) {
+    cleaned = mdMatch[1].trim();
+  }
+
+  const firstBrace = cleaned.indexOf('{');
+  if (firstBrace === -1) return null;
+  cleaned = cleaned.substring(firstBrace);
+
+  const stack: string[] = [];
+  let inString = false;
+  let escapeNext = false;
+
+  for (let i = 0; i < cleaned.length; i++) {
+    const ch = cleaned[i];
+    if (escapeNext) {
+      escapeNext = false;
+      continue;
+    }
+    if (ch === '\\') {
+      escapeNext = true;
+      continue;
+    }
+    if (ch === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (!inString) {
+      if (ch === '{' || ch === '[') {
+        stack.push(ch === '{' ? '}' : ']');
+      } else if (ch === '}' || ch === ']') {
+        if (stack.length > 0 && stack[stack.length - 1] === ch) {
+          stack.pop();
+        }
+      }
+    }
+  }
+
+  let candidate = cleaned;
+  if (inString) {
+    candidate += '"';
+  }
+
+  // Remove trailing commas or dangling keys
+  candidate = candidate.replace(/,\s*$/g, '');
+  candidate = candidate.replace(/:\s*$/g, ': null');
+  candidate = candidate.replace(/,\s*([}\]])/g, '$1');
+
+  // Close remaining open brackets in reverse order
+  while (stack.length > 0) {
+    candidate += stack.pop();
+  }
+
+  try {
+    return JSON.parse(candidate);
+  } catch (_) {
+    try {
+      const fixedCommas = candidate
+        .replace(/,\s*([}\]])/g, '$1')
+        .replace(/\/\*[\s\S]*?\*\/|([^:]|^)\/\/.*$/gm, '$1');
+      return JSON.parse(fixedCommas);
+    } catch (_) {
+      return null;
+    }
+  }
+}
+
 export function safeExtractAndParseJson(raw: string): any {
   if (!raw || typeof raw !== 'string') return null;
 
@@ -73,6 +143,12 @@ export function safeExtractAndParseJson(raw: string): any {
       const fixedCommas = bracketSnippet.replace(/,\s*([}\]])/g, '$1');
       return JSON.parse(fixedCommas);
     } catch (_) {}
+  }
+
+  // 6. Repair truncated JSON
+  const repaired = repairTruncatedJson(cleaned);
+  if (repaired && typeof repaired === 'object') {
+    return repaired;
   }
 
   return null;
@@ -141,6 +217,364 @@ export function parseCurlDetails(rawCurl: string) {
   }
 
   return { uri, method, headers, body };
+}
+
+export function extractParametersFromCurlAndBody(curl: string, body: string, uri: string): Array<{ name: string; type: string; desc: string }> {
+  const paramsMap = new Map<string, { type: string; desc: string }>();
+
+  // 1. Look for {{request.param}} in uri, body, curl
+  const requestParamRegex = /{{(?:request\.)?([a-zA-Z0-9_]+)}}/g;
+  let match: RegExpExecArray | null;
+  const combined = `${uri} ${body} ${curl}`;
+  while ((match = requestParamRegex.exec(combined)) !== null) {
+    const pName = match[1];
+    if (pName && pName !== 'request' && pName !== 'token' && pName !== 'tojson' && !pName.startsWith('tratar_')) {
+      if (!paramsMap.has(pName)) {
+        paramsMap.set(pName, {
+          type: 'str',
+          desc: `Parâmetro ${pName} fornecido pelo cliente durante o atendimento.`
+        });
+      }
+    }
+  }
+
+  // 2. Parse JSON body if present
+  if (body) {
+    try {
+      const parsedBody = JSON.parse(body);
+      if (parsedBody && typeof parsedBody === 'object' && !Array.isArray(parsedBody)) {
+        Object.keys(parsedBody).forEach(k => {
+          if (!paramsMap.has(k)) {
+            paramsMap.set(k, {
+              type: typeof parsedBody[k] === 'number' ? 'int' : 'str',
+              desc: `Campo ${k} informado ou validado com o cliente.`
+            });
+          }
+        });
+      }
+    } catch (_) {}
+  }
+
+  // 3. Query params in URI
+  try {
+    const qIdx = uri.indexOf('?');
+    if (qIdx !== -1) {
+      const qs = uri.substring(qIdx + 1);
+      qs.split('&').forEach(pair => {
+        const [k] = pair.split('=');
+        if (k && !k.includes('[') && !paramsMap.has(k)) {
+          paramsMap.set(k, { type: 'str', desc: `Parâmetro de consulta ${k}.` });
+        }
+      });
+    }
+  } catch (_) {}
+
+  if (paramsMap.size === 0) {
+    paramsMap.set('documento', {
+      type: 'str',
+      desc: 'Número de CPF, CNPJ ou identificador informado pelo cliente na conversa.'
+    });
+  }
+
+  return Array.from(paramsMap.entries()).map(([name, val]) => ({
+    name,
+    type: val.type,
+    desc: val.desc
+  }));
+}
+
+export function generateDocstringForWorkflow(
+  wfName: string,
+  cwIdx: number,
+  params: Array<{ name: string; type: string; desc: string }>,
+  isChained: boolean,
+  curlCount: number
+): string {
+  const cleanTitle = (wfName || `Operação ${cwIdx + 1}`).replace(/^[0-9.\-_ ]+/, '').trim();
+  const title = cleanTitle.charAt(0).toUpperCase() + cleanTitle.slice(1);
+
+  const desc = isChained
+    ? `Executa a esteira técnica encadeada de ${title.toLowerCase()} (${curlCount} etapas automatizadas) utilizando os dados validados com o cliente no chat.\nSempre confirme as informações antes de disparar.`
+    : `Realiza a operação de ${title.toLowerCase()} com base nos parâmetros coletados durante o atendimento.\nDispare esta ferramenta assim que identificar ou confirmar os dados necessários.`;
+
+  const argsFormatted = params
+    .map(p => `  ${p.name} (${p.type}): ${p.desc}`)
+    .join('\n');
+
+  return `${title}\n\n${desc}\n\nArgs:\n${argsFormatted}\n\nReturns:\n\tdict: Retorno estruturado contendo o resultado da operação e dados processados.`;
+}
+
+export function synthesizeWorkflowsFromConfiguredList(
+  validConfiguredWorkflows: any[],
+  workflowArchitectureMode: string,
+  validCurlItems: any[]
+): any[] {
+  // If single_consolidated:
+  if (workflowArchitectureMode === 'single_consolidated') {
+    const allCurlItems = validConfiguredWorkflows.flatMap((cw: any) => cw.curlItems || []);
+    if (allCurlItems.length === 0 && validCurlItems.length > 0) {
+      allCurlItems.push(...validCurlItems);
+    }
+    const chainedFlowNodes: any[] = [];
+    const pipelineTitle = validConfiguredWorkflows.length > 1
+      ? `Fluxo Integrado (${validConfiguredWorkflows.map((c: any) => (c.name || 'Etapa').replace(/^[0-9.\-_ ]+/, '').trim()).join(' ➔ ')})`
+      : ((validConfiguredWorkflows[0]?.name || 'Consulta de Informações').replace(/^[0-9.\-_ ]+/, '').trim());
+
+    const allParams = allCurlItems.flatMap((item: any) => {
+      const details = parseCurlDetails(item.curl || '');
+      return extractParametersFromCurlAndBody(item.curl || '', details.body, details.uri);
+    });
+    const uniqueParams = Array.from(new Map(allParams.map(p => [p.name, p])).values());
+
+    const docstring = `${pipelineTitle}\n\nExecuta o fluxo completo integrado de atendimento utilizando os dados coletados na conversa.\n\nArgs:\n` +
+      uniqueParams.map(p => `  ${p.name} (${p.type}): ${p.desc}`).join('\n') +
+      `\n\nReturns:\n\tdict: Resultado estruturado consolidado de todas as etapas.`;
+
+    chainedFlowNodes.push({
+      id: crypto.randomUUID(),
+      type: 'instructions',
+      __spec: true,
+      __spec_version: '1.0.0',
+      content: docstring
+    });
+
+    chainedFlowNodes.push({
+      id: crypto.randomUUID(),
+      name: 'request',
+      type: 'code',
+      __spec: true,
+      __spec_version: '1.0.0',
+      error_message: 'Desculpe estou com dificuldades para processar sua solicitação',
+      value: `try {
+    let data = _vars._request.body;
+
+    if (data && typeof data === 'object' && Object.keys(data).length === 1 && data.data) {
+        data = data.data;
+    }
+
+    return data;
+
+} catch (e) {
+    return {
+        error: "Failed to extract request data",
+        details: JSON.stringify(e)
+    };
+}`
+    });
+
+    allCurlItems.forEach((item: any, idx: number) => {
+      const details = parseCurlDetails(item.curl || '');
+      const cleanUri = details.uri;
+      const cleanMethod = details.method;
+      const nodeName = item.nodeName || (idx === 0 && (cleanUri.includes('auth') || cleanUri.includes('token') || cleanUri.includes('login')) ? 'token' : `etapa_${idx + 1}`);
+
+      const headers: any[] = details.headers && details.headers.length > 0 ? [...details.headers] : [{ key: 'Content-Type', value: 'application/json' }];
+      if (idx > 0 && !headers.some(h => h.key.toLowerCase() === 'authorization')) {
+        headers.push({ key: 'Authorization', value: 'Bearer {{token.access_token || token.token}}' });
+      }
+
+      chainedFlowNodes.push({
+        id: crypto.randomUUID(),
+        name: nodeName,
+        type: 'rest',
+        __spec: true,
+        __spec_version: '1.0.0',
+        method: cleanMethod,
+        uri: cleanUri,
+        verify_ssl: true,
+        body_format: 'json',
+        credential_id: '',
+        headers: headers,
+        params: '',
+        query_params: [],
+        search_params: '',
+        file_params: [],
+        body: details.body || (cleanMethod === 'POST' ? '{\n  "key": "value"\n}' : '')
+      });
+
+      chainedFlowNodes.push({
+        id: crypto.randomUUID(),
+        name: `tratar_${nodeName}`,
+        type: 'code',
+        __spec: true,
+        __spec_version: '1.0.0',
+        error_message: `Desculpe estou com dificuldades para processar sua solicitação`,
+        value: (item.generatedJsCode && item.generatedJsCode.trim())
+          ? item.generatedJsCode
+          : (idx === 0 && nodeName === 'token')
+            ? `try {\n    let raw = _vars.${nodeName};\n    if (typeof raw === 'string') raw = JSON.parse(raw);\n    return {\n        access_token: (raw && (raw.access_token || raw.token || raw.jwt)) || '',\n        status: 'autenticado'\n    };\n} catch(e) {\n    return { status: 'erro', message: e.message };\n}`
+            : `try {\n    let raw = _vars.${nodeName};\n    if (typeof raw === 'string') raw = JSON.parse(raw);\n    let items = (raw && raw.result && raw.result.items) ? raw.result.items :\n                (raw && raw.data) ? raw.data : (raw && raw.items) ? raw.items : [raw];\n    return {\n        status: 'sucesso',\n        dados: items[0] || raw,\n        total: items.length\n    };\n} catch(e) {\n    return { status: 'erro', message: e.message };\n}`
+      });
+    });
+
+    const lastNodeName = allCurlItems[allCurlItems.length - 1]?.nodeName || `etapa_${allCurlItems.length}`;
+    chainedFlowNodes.push({
+      id: crypto.randomUUID(),
+      type: 'route_return',
+      __spec: true,
+      __spec_version: '1.0.0',
+      content_type: 'application/json',
+      status_code: '200',
+      value: `{{#tojson}}\n{{tratar_${lastNodeName}}}\n{{/tojson}}`
+    });
+
+    return [{
+      id: crypto.randomUUID(),
+      name: 'WF - Pipeline Integrado',
+      enabled: true,
+      allow_workflow_import: true,
+      protected: false,
+      options: {
+        abort_keyword: '###',
+        abort_message: 'Sessão abortada!',
+        finish_message: 'Até a próxima!',
+        inactivity_message: 'Sessão encerrada por inatividade!',
+        inactivity_warning: 'Sua sessão vai expirar em breve por inatividade',
+        inactivity_warning_time: 60,
+        timeout: 300
+      },
+      flow: chainedFlowNodes
+    }];
+  }
+
+  // Multiple modular workflows (1 workflow for each operation):
+  return validConfiguredWorkflows.map((cw: any, cwIdx: number) => {
+    const rawWfName = (cw.name || `Operação ${cwIdx + 1}`).replace(/^[0-9.\-_ ]+/, '').trim();
+    const modTitle = rawWfName.charAt(0).toUpperCase() + rawWfName.slice(1);
+    const curlItems = (cw.curlItems && Array.isArray(cw.curlItems) && cw.curlItems.length > 0)
+      ? cw.curlItems
+      : [{
+          id: crypto.randomUUID(),
+          name: modTitle,
+          nodeName: 'resposta_api',
+          curl: `curl -X POST "https://api.empresa.com.br/v1/operacao" -H "Content-Type: application/json" -d '{"documento": "{{request.documento}}"}'`,
+          responseSample: '{"status": "sucesso"}',
+          filterRules: 'Tratar dados para retorno.'
+        }];
+
+    const isChained = curlItems.length > 1;
+    const allParams = curlItems.flatMap((item: any) => {
+      const details = parseCurlDetails(item.curl || '');
+      return extractParametersFromCurlAndBody(item.curl || '', details.body, details.uri);
+    });
+    const uniqueParams = Array.from(new Map(allParams.map(p => [p.name, p])).values()) as Array<{ name: string; type: string; desc: string }>;
+
+    const docstring = generateDocstringForWorkflow(modTitle, cwIdx, uniqueParams, isChained, curlItems.length);
+
+    const flowNodes: any[] = [];
+
+    // 1. Instructions node
+    flowNodes.push({
+      id: crypto.randomUUID(),
+      type: 'instructions',
+      __spec: true,
+      __spec_version: '1.0.0',
+      content: docstring
+    });
+
+    // 2. Request unpacking code node
+    flowNodes.push({
+      id: crypto.randomUUID(),
+      name: 'request',
+      type: 'code',
+      __spec: true,
+      __spec_version: '1.0.0',
+      error_message: 'Desculpe estou com dificuldades para processar sua solicitação',
+      value: `try {
+    let data = _vars._request.body;
+
+    if (data && typeof data === 'object' && Object.keys(data).length === 1 && data.data) {
+        data = data.data;
+    }
+
+    return data;
+
+} catch (e) {
+    return {
+        error: "Failed to extract request data",
+        details: JSON.stringify(e)
+    };
+}`
+    });
+
+    // 3. REST and Code nodes
+    curlItems.forEach((cItem: any, cIdx: number) => {
+      const details = parseCurlDetails(cItem.curl || '');
+      const cleanUri = details.uri;
+      const cleanMethod = details.method;
+      const nodeName = cItem.nodeName || (isChained ? (cIdx === 0 && (cleanUri.includes('auth') || cleanUri.includes('token') || cleanUri.includes('login')) ? 'token' : `etapa_${cIdx + 1}`) : `resposta_api_${cwIdx + 1}`);
+
+      const headers: any[] = details.headers && details.headers.length > 0 ? [...details.headers] : [{ key: 'Content-Type', value: 'application/json' }];
+      if (cIdx > 0 && !headers.some(h => h.key.toLowerCase() === 'authorization')) {
+        headers.push({ key: 'Authorization', value: 'Bearer {{token.access_token || token.token}}' });
+      }
+
+      flowNodes.push({
+        id: crypto.randomUUID(),
+        name: nodeName,
+        type: 'rest',
+        __spec: true,
+        __spec_version: '1.0.0',
+        method: cleanMethod,
+        uri: cleanUri,
+        verify_ssl: true,
+        body_format: 'json',
+        credential_id: '',
+        headers: headers,
+        params: '',
+        query_params: [],
+        search_params: '',
+        file_params: [],
+        body: details.body || (cleanMethod === 'POST' ? '{\n  "key": "value"\n}' : '')
+      });
+
+      flowNodes.push({
+        id: crypto.randomUUID(),
+        name: `tratar_${nodeName}`,
+        type: 'code',
+        __spec: true,
+        __spec_version: '1.0.0',
+        error_message: `Desculpe estou com dificuldades para processar sua solicitação`,
+        value: (cItem.generatedJsCode && cItem.generatedJsCode.trim())
+          ? cItem.generatedJsCode
+          : (cItem.filterRules && cItem.filterRules.includes('try') && cItem.filterRules.includes('return'))
+            ? cItem.filterRules
+            : (cIdx === 0 && nodeName === 'token')
+              ? `try {\n    let raw = _vars.${nodeName};\n    if (typeof raw === 'string') raw = JSON.parse(raw);\n    return {\n        access_token: (raw && (raw.access_token || raw.token || raw.jwt)) || '',\n        status: 'autenticado'\n    };\n} catch(e) {\n    return { status: 'erro', message: e.message };\n}`
+              : `try {\n    let raw = _vars.${nodeName};\n    if (typeof raw === 'string') raw = JSON.parse(raw);\n    let items = (raw && raw.result && raw.result.items) ? raw.result.items :\n                (raw && raw.data) ? raw.data : (raw && raw.items) ? raw.items : [raw];\n    return {\n        status: 'sucesso',\n        dados: items[0] || raw,\n        total: items.length\n    };\n} catch(e) {\n    return { status: 'erro', message: e.message };\n}`
+      });
+    });
+
+    // 4. Route Return node
+    const lastNodeName = curlItems[curlItems.length - 1]?.nodeName || (isChained ? `etapa_${curlItems.length}` : `resposta_api_${cwIdx + 1}`);
+    flowNodes.push({
+      id: crypto.randomUUID(),
+      type: 'route_return',
+      __spec: true,
+      __spec_version: '1.0.0',
+      content_type: 'application/json',
+      status_code: '200',
+      value: `{{#tojson}}\n{{tratar_${lastNodeName}}}\n{{/tojson}}`
+    });
+
+    return {
+      id: cw.id || crypto.randomUUID(),
+      name: cw.name || `${cwIdx + 1}º - ${modTitle}`,
+      enabled: true,
+      allow_workflow_import: true,
+      protected: false,
+      options: {
+        abort_keyword: '###',
+        abort_message: 'Sessão abortada!',
+        finish_message: 'Até a próxima!',
+        inactivity_message: 'Sessão encerrada por inatividade!',
+        inactivity_warning: 'Sua sessão vai expirar em breve por inatividade',
+        inactivity_warning_time: 60,
+        timeout: 300
+      },
+      flow: flowNodes
+    };
+  });
 }
 
 const FORTICS_SYSTEM_PROMPT = `
@@ -833,6 +1267,20 @@ ${naturalRules || '- Validação de dados de entrada\n- Solicitar confirmação 
 `;
     }
 
+    const validConfiguredWorkflows = (configuredWorkflows && Array.isArray(configuredWorkflows))
+      ? configuredWorkflows.filter((cw: any) => cw && ((cw.curlItems && Array.isArray(cw.curlItems) && cw.curlItems.length > 0) || cw.name))
+      : [];
+
+    let generatedWorkflowsList: any[] = synthesizeWorkflowsFromConfiguredList(
+      validConfiguredWorkflows.length > 0
+        ? validConfiguredWorkflows
+        : (validCurlItems.length > 0
+          ? [{ id: crypto.randomUUID(), name: businessContext || 'Workflow de Integração', curlItems: validCurlItems }]
+          : []),
+      workflowArchitectureMode,
+      businessContext
+    );
+
     const userPrompt = `
 MODO DE OPERAÇÃO: ${mode === 'refactor' ? 'REFATORAÇÃO E OTIMIZAÇÃO DE ESTRUTURA EXISTENTE' : 'CRIAÇÃO'}
 ESCOPO SOLICITADO PELO USUÁRIO: ${studioMode === 'workflow_only' ? 'FOCO EXCLUSIVO EM WORKFLOWS E INTEGRAÇÕES DE API' : studioMode === 'agent_only' ? 'FOCO EXCLUSIVO EM AGENTE DE IA (PROMPTS, INSTRUÇÕES, REGRAS E TOOLS)' : 'COMPLETO (AGENTE DE IA + WORKFLOWS INTERLIGADOS)'}
@@ -927,6 +1375,25 @@ INSTRUÇÕES CRÍTICAS DE ENGENHARIA (PADRÃO FORTICS RIGOROSO):
     - Retorne um objeto limpo e estruturado com { status: 'sucesso', total: limpos.length, item_principal: principal_ou_selecionado, itens: limpos }.
   * FINALIZAÇÃO 'route_return': Finalize sempre com nó 'route_return' status_code "200" e value "{{#tojson}}\\n{{tratar_dados}}\\n{{/tojson}}" (ou o nome da variável tratada).
 
+
+${validConfiguredWorkflows.length > 1 ? `
+DIRETIVA PARA MÚLTIPLOS WORKFLOWS (${validConfiguredWorkflows.length} OPERAÇÕES CONFIGURADAS):
+Os ${validConfiguredWorkflows.length} workflows já estão compilados no ecossistema Fortics com perfeição técnica.
+SUA MISSÃO PRINCIPAL É GERAR O AGENTE ORQUESTRADOR MASTER com:
+- instruction.objective: Objetivo claro atendendo a todas as operações.
+- instruction.role: Papel funcional terminando em 'Siga os seguintes passos:'.
+- instruction.steps: Passos detalhados coordenando a chamada das ferramentas disponíveis:
+${validConfiguredWorkflows.map((w: any, idx: number) => `  * Operação ${idx + 1} (${w.name}): ${w.description || 'Executa a integração'}`).join('\n')}
+- other_rules: Regras detalhadas de validação, formato de documento (CPF 11 dígitos, CNPJ 14 dígitos), tags de transbordo (#HUMANO, #SUPORTE, #FINANCEIRO, #COMERCIAL, #FIM).
+- tools: Lista de ferramentas correspondente a cada um dos ${validConfiguredWorkflows.length} workflows.
+
+Gere o JSON consolidado estritamente com as chaves:
+{
+  "agent": { ...objeto completo agente.json oficial refletindo os passos, regras e tools de cada operação... },
+  "summary": "Resumo executivo do agente e das ${validConfiguredWorkflows.length} operações integradas",
+  "variableChainSummary": "Mapeamento detalhado da cadeia de variáveis e contexto entre chat e workflows"
+}
+` : `
 Gere o JSON consolidado estritamente com as chaves:
 {
   "agent": { ...objeto completo agente.json oficial refletindo os passos e regras do usuário... },
@@ -937,10 +1404,10 @@ Gere o JSON consolidado estritamente com as chaves:
   "summary": "Resumo executivo do que foi criado e cURLs selecionados",
   "variableChainSummary": "Mapeamento detalhado da cadeia de variáveis (Entrada -> 1ª API -> Retorno no Chat com ID -> 2ª API -> Resposta Final)"
 }
+`}
 `;
 
     let rawOutput = '';
-    let generatedWorkflowsList: any[] = [];
 
     try {
       if (provider === 'openai') {
@@ -1850,7 +2317,7 @@ Gere o JSON consolidado estritamente com as chaves:
       sanitizedWorkflows = [parsed.workflow];
     }
 
-    if (sanitizedWorkflows.length === 0) {
+    if (sanitizedWorkflows.length < generatedWorkflowsList.length) {
       if (generatedWorkflowsList && generatedWorkflowsList.length > 0) {
         sanitizedWorkflows = generatedWorkflowsList.map((wf: any, idx: number) =>
           sanitizeWorkflow(wf, `Workflow ${idx + 1} - ${wf.name || 'Integração'}`)
@@ -2047,6 +2514,46 @@ Gere o JSON consolidado estritamente com as chaves:
           temperature: 0.2
         });
       });
+    }
+
+    if (parsed.agent && multiAgents.length === 0) {
+      if (!parsed.agent.tools || !Array.isArray(parsed.agent.tools) || parsed.agent.tools.length < sanitizedWorkflows.length) {
+        parsed.agent.tools = sanitizedWorkflows.map((wf: any, idx: number) => {
+          const cleanToolName = (wf.name || `operacao_${idx + 1}`).toLowerCase()
+            .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+            .replace(/[^a-z0-9_]/g, '_')
+            .replace(/^_+|_+$/g, '');
+
+          const instNode = wf.flow?.find((n: any) => n.type === 'instructions');
+          const firstLine = instNode?.content?.split('\n')[0] || wf.name || `Operação ${idx + 1}`;
+
+          return {
+            id: crypto.randomUUID(),
+            name: cleanToolName || `tool_${wf.id.slice(0, 8)}`,
+            description: `Executa a ferramenta ${wf.name}: ${firstLine}`,
+            workflow_id: wf.id,
+            type: 'workflow',
+            enabled: true,
+            parameters: [
+              {
+                name: 'dados',
+                type: 'object',
+                description: 'Parâmetros necessários para a requisição da ferramenta',
+                required: false
+              }
+            ]
+          };
+        });
+      }
+
+      if (!parsed.agent.instruction.steps || parsed.agent.instruction.steps.length === 0) {
+        parsed.agent.instruction.steps = [
+          'Cumprimentar o cliente e identificar a necessidade do atendimento',
+          'Solicitar e confirmar o documento de identificação ou parâmetro necessário',
+          ...sanitizedWorkflows.map((w: any) => `Acionar a ferramenta de ${w.name || 'integração'} com os dados informados`),
+          'Apresentar o resultado com clareza e confirmar a finalização do atendimento'
+        ];
+      }
     }
 
     res.json({

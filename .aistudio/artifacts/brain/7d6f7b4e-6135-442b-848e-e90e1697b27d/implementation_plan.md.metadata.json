@@ -1,0 +1,6 @@
+{
+  "summary": "Plano de implementação para corrigir e otimizar a conversão de fluxos do Total.js para Workflows e Agente Fortics.\nResolve a falha de 'JSON inválido' decorrente do estouro de tokens ao gerar 12 workflows simultâneos, implementando geração modular com IA para o Agente e criação de 12 workflows individuais completos e validados.",
+  "updatedAt": "2026-10-15T11:39:10.870383101Z",
+  "requestFeedback": true,
+  "userFacing": true
+}
